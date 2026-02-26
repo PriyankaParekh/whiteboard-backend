@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const app = express();
 const port = 3001;
@@ -115,6 +116,39 @@ io.on("connection", (socket) => {
       if (redis) await redis.rPush(`room:${roomId}`, JSON.stringify(element));
     } catch (err) {
       console.error("Redis rPush failed for", roomId, err);
+    }
+  });
+
+  socket.on("delete_element", async (data) => {
+    const { roomId, elementId } = data;
+    socket.to(roomId).emit("element_deleted", { elementId });
+
+    if (redis) {
+      try {
+        const list = await redis.lRange(`room:${roomId}`, 0, -1);
+        const filtered = list.filter((item) => {
+          try {
+            const parsed = JSON.parse(item);
+            return parsed.id !== elementId; // ← use `id`, not `elementId`
+          } catch {
+            return true; // keep item if parse fails
+          }
+        });
+        await redis.del(`room:${roomId}`);
+        if (filtered.length > 0) await redis.rPush(`room:${roomId}`, filtered);
+      } catch (err) {
+        console.error("Redis delete_element failed for", roomId, err);
+      }
+    }
+
+    try {
+      await Room.findOneAndUpdate(
+        { roomId },
+        { $pull: { elements: { id: elementId } } }, // ← pull by `id`
+        { new: true },
+      );
+    } catch (err) {
+      console.error("Mongo update failed on delete_element for", roomId, err);
     }
   });
 
