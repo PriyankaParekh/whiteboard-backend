@@ -44,10 +44,17 @@ async function saveRoomToMongo(roomId) {
       console.error("Failed to parse redis data for", roomId, err);
       return;
     }
-
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 3 * 60 * 60 * 1000);
     await Room.findOneAndUpdate(
       { roomId },
-      { elements: parsedData },
+      {
+        $set: { elements: parsedData },
+        $setOnInsert: {
+          createdAt: now,
+          expiresAt: expiresAt,
+        },
+      },
       { upsert: true, new: true },
     );
     console.log(`Room ${roomId} data saved to MongoDB!`);
@@ -65,6 +72,13 @@ io.on("connection", (socket) => {
     socket.join(roomId);
     // Track active room
     activeRooms.add(roomId);
+
+    const existingRoom = await Room.findOne({ roomId });
+    if (existingRoom && existingRoom.expiresAt < new Date()) {
+      socket.emit("room_expired"); // Tell client the room is expired
+      socket.leave(roomId);
+      return;
+    }
 
     // Step A: Redis se data maango (Latest drawing)
     // LRANGE room:123 0 -1 (Matlab poora list dedo)
@@ -106,6 +120,12 @@ io.on("connection", (socket) => {
   // 2. DRAWING LOGIC (Real-time)
   socket.on("draw_element", async (data) => {
     const { roomId, element } = data;
+
+    const room = await Room.findOne({ roomId });
+    if (room && room.expiresAt < new Date()) {
+      socket.emit("room_expired");
+      return;
+    }
 
     // Step A: Doosron ko dikhao (Broadcast)
     socket.to(roomId).emit("receive_draw", element);
