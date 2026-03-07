@@ -26,6 +26,23 @@ const io = new Server(server, {
 connectDB();
 
 const activeRooms = new Set();
+const roomUsers = new Map();
+
+const USER_COLORS = [
+  "#6366f1",
+  "#f472b6",
+  "#34d399",
+  "#fb923c",
+  "#38bdf8",
+  "#a78bfa",
+  "#f87171",
+  "#4ade80",
+  "#facc15",
+  "#e879f9",
+];
+function getColor(index) {
+  return USER_COLORS[index % USER_COLORS.length];
+}
 
 // ─── Per-room debounce timers for MongoDB saves ────────────────────────────
 const mongoSaveTimers = new Map();
@@ -139,9 +156,26 @@ io.on("connection", (socket) => {
   console.log(`User Connected: ${socket.id}`);
 
   // 1. JOIN ROOM
-  socket.on("join_room", async (roomId) => {
+  socket.on("join_room", async (roomId, userName) => {
     socket.join(roomId);
     activeRooms.add(roomId);
+
+    // Register user
+    if (!roomUsers.has(roomId)) roomUsers.set(roomId, new Map());
+    const users = roomUsers.get(roomId);
+    const color = getColor(users.size);
+    const userInfo = {
+      name: userName || "Anonymous",
+      color,
+      socketId: socket.id,
+    };
+    users.set(socket.id, userInfo);
+
+    // Notify others that this user joined
+    socket.to(roomId).emit("user_joined", userInfo);
+    // Send current user list to the joining user
+    socket.emit("room_users", Array.from(users.values()));
+
     const redis = getRedisClient();
 
     const existingRoom = await Room.findOne({ roomId });
@@ -219,7 +253,6 @@ io.on("connection", (socket) => {
         { $pull: { elements: { id: elementId } } },
         { new: true },
       );
-      console.log(`🗑️  Element ${elementId} deleted from MongoDB`);
     } catch (err) {
       console.error("Mongo delete_element failed for", roomId, err);
     }
@@ -246,9 +279,6 @@ io.on("connection", (socket) => {
         { $pull: { elements: { id: { $in: elementIds } } } },
         { new: true },
       );
-      console.log(
-        `🗑️  Elements [${elementIds.join(", ")}] deleted from MongoDB`,
-      );
     } catch (err) {
       console.error("Mongo delete_elements failed for", roomId, err);
     }
@@ -273,9 +303,20 @@ io.on("connection", (socket) => {
     for (const roomId of socket.rooms) {
       if (roomId === socket.id) continue;
       scheduleSaveToMongo(roomId);
+
+      const users = roomUsers.get(roomId);
+      if (users) {
+        const leavingUser = users.get(socket.id);
+        users.delete(socket.id);
+        if (leavingUser) {
+          socket
+            .to(roomId)
+            .emit("user_left", { socketId: socket.id, name: leavingUser.name });
+        }
+        if (users.size === 0) roomUsers.delete(roomId);
+      }
     }
   });
-
   socket.on("disconnect", () => {
     console.log("User Disconnected", socket.id);
   });
