@@ -237,7 +237,18 @@ io.on("connection", (socket) => {
     scheduleSaveToMongo(roomId);
   });
 
-  // 3. DELETE SINGLE ELEMENT
+  // 3. CURSOR MOVEMENT
+  socket.on("cursor_move", ({ roomId, x, y, userName, color }) => {
+    socket.to(roomId).emit("cursor_moved", {
+      socketId: socket.id,
+      x,
+      y,
+      userName,
+      color,
+    });
+  });
+
+  // 4. DELETE SINGLE ELEMENT
   socket.on("delete_element", async ({ roomId, elementId }) => {
     socket.to(roomId).emit("element_deleted", { elementId });
 
@@ -253,6 +264,7 @@ io.on("connection", (socket) => {
         { $pull: { elements: { id: elementId } } },
         { new: true },
       );
+      console.log(`🗑️  Element ${elementId} deleted from MongoDB`);
     } catch (err) {
       console.error("Mongo delete_element failed for", roomId, err);
     }
@@ -278,6 +290,9 @@ io.on("connection", (socket) => {
         { roomId },
         { $pull: { elements: { id: { $in: elementIds } } } },
         { new: true },
+      );
+      console.log(
+        `🗑️  Elements [${elementIds.join(", ")}] deleted from MongoDB`,
       );
     } catch (err) {
       console.error("Mongo delete_elements failed for", roomId, err);
